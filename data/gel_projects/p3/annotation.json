@@ -1,0 +1,29 @@
+{
+  "project_name": "p3",
+  "lanes": [
+    {
+      "x": 8,
+      "name": "MK",
+      "bands": []
+    },
+    {
+      "x": 114,
+      "name": "R",
+      "bands": []
+    },
+    {
+      "x": 29,
+      "name": "NR",
+      "bands": []
+    }
+  ],
+  "mk_type": "65kd",
+  "label_offset": -10,
+  "rotation": 0,
+  "font": "Arial",
+  "band_offset": 15,
+  "font_size": 16,
+  "lane_color": "#000000",
+  "band_color": "#000000",
+  "offset_settings": {}
+}

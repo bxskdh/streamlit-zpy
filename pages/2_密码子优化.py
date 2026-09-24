@@ -1,0 +1,1448 @@
+import streamlit as st
+import pandas as pd
+from io import StringIO, BytesIO
+import os
+import matplotlib.pyplot as plt
+import numpy as np
+import csv
+
+# ========== 全局数据加载 ==========
+
+@st.cache_data
+def load_codon_data():
+    """加载密码子优先级表（从独立的txt文件）"""
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(current_dir)
+
+    # 三个独立的txt文件
+    files = {
+        '毕赤酵母': os.path.join(root_dir, '毕赤酵母密码子优先级.txt'),
+        '汉逊酵母': os.path.join(root_dir, '汉逊酵母密码子优先级.txt'),
+        '细胞表达系统': os.path.join(root_dir, '细胞表达系统密码子优先级.txt'),
+    }
+
+    result = {}
+    for host_name, file_path in files.items():
+        codon_dict = {}
+        try:
+            # 尝试多种编码
+            content = None
+            for encoding in ['utf-8', 'gbk', 'latin-1']:
+                try:
+                    with open(file_path, 'r', encoding=encoding) as f:
+                        content = f.read()
+                    break
+                except UnicodeDecodeError:
+                    continue
+
+            if content is None:
+                st.error(f"无法解码文件: {file_path}")
+                continue
+
+            lines = content.split('\n')
+
+            # 检测标题行，找到数据开始的位置
+            start_idx = 0
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                # 跳过空行
+                if not stripped:
+                    continue
+                # 检测是否是列名行
+                parts = stripped.split('\t')
+                if len(parts) >= 3:
+                    first_col = parts[0].strip().lower()
+                    if first_col in ['aa', '氨基酸', 'amino_acid']:
+                        start_idx = i + 1
+                        break
+                    # 如果第一列看起来像氨基酸（如A(Ala)），则这行就是数据
+                    elif len(first_col) <= 2 and first_col.isalpha():
+                        start_idx = i
+                        break
+                # 如果第一列为空但后面有数据，也是数据行
+                elif len(parts) >= 2 and parts[0].strip() == '':
+                    start_idx = i
+                    break
+
+            current_aa = None
+            for line in lines[start_idx:]:
+                line_raw = line  # 保留原始行，不strip
+                if not line_raw.strip():  # 跳过空行，但保留原始内容用于split
+                    continue
+
+                # 使用csv.reader处理tab分隔，保留空字段
+                reader = csv.reader([line_raw], delimiter='\t')
+                parts = next(reader)
+
+                # 第一列可能是氨基酸（非空）或空（表示同一氨基酸的下一个密码子）
+                if len(parts) >= 1 and parts[0].strip():
+                    aa_str = parts[0].strip()
+                    # 提取氨基酸单字母（去掉括号内容）
+                    current_aa = aa_str.split('(')[0].strip().upper()
+                    if current_aa not in codon_dict:
+                        codon_dict[current_aa] = []
+
+                # 确定triplet和priority的列索引
+                # 如果第一列为空，则triplet在索引0（实际是索引1，但parts[0]为空）
+                # 如果第一列有氨基酸，则triplet在索引1
+                if len(parts) >= 1 and parts[0].strip() == '':
+                    # 第一列为空，格式为: \tTriplet\tpriority
+                    triplet_idx = 1 if len(parts) >= 2 else None
+                    priority_idx = 2 if len(parts) >= 3 else None
+                else:
+                    # 第一列有氨基酸，格式为: AA\tTriplet\tpriority
+                    triplet_idx = 1 if len(parts) >= 2 else None
+                    priority_idx = 2 if len(parts) >= 3 else None
+
+                if triplet_idx is None or priority_idx is None:
+                    continue
+
+                triplet = parts[triplet_idx].strip().upper() if triplet_idx < len(parts) else None
+                priority_str = parts[priority_idx].strip() if priority_idx < len(parts) else None
+
+                if triplet and priority_str and current_aa:
+                    try:
+                        # 只保留ATCG字符
+                        triplet_clean = ''.join([c for c in triplet if c in 'ATCG'])
+                        if len(triplet_clean) == 3:
+                            codon_dict[current_aa].append({
+                                'triplet': triplet_clean,
+                                'priority': int(float(priority_str))
+                            })
+                    except (ValueError, TypeError):
+                        pass
+
+        except FileNotFoundError:
+            st.error(f"找不到密码子优先级文件: {file_path}")
+            codon_dict = {}
+        except Exception as e:
+            st.error(f"加载 {host_name} 密码子表失败: {str(e)}")
+            codon_dict = {}
+
+        # 清理空项
+        codon_dict = {k: v for k, v in codon_dict.items() if v}
+        result[host_name] = codon_dict
+
+    return result
+
+
+def parse_custom_codon_file(file_obj):
+    """
+    解析用户上传的自定义密码子优先级文件
+    支持tab分隔的txt文件或csv/excel
+    """
+    try:
+        filename = file_obj.name.lower()
+
+        if filename.endswith('.txt'):
+            # tab分隔的txt文件
+            content = file_obj.read().decode('utf-8')
+            lines = content.split('\n')
+
+            custom_dict = {}
+            current_aa = None
+            start_idx = 0
+
+            # 检测是否有标题行
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                parts = stripped.split('\t')
+                if len(parts) >= 3:
+                    first_col = parts[0].strip().lower()
+                    if first_col in ['aa', '氨基酸', 'amino_acid']:
+                        start_idx = i + 1
+                        break
+                    elif len(first_col) <= 2 and first_col.isalpha():
+                        start_idx = i
+                        break
+                elif len(parts) >= 2 and parts[0].strip() == '':
+                    start_idx = i
+                    break
+
+            for line in lines[start_idx:]:
+                line_raw = line
+                if not line_raw.strip():
+                    continue
+
+                reader = csv.reader([line_raw], delimiter='\t')
+                parts = next(reader)
+
+                if len(parts) >= 1 and parts[0].strip():
+                    aa_str = parts[0].strip()
+                    current_aa = aa_str.split('(')[0].strip().upper()
+                    if current_aa not in custom_dict:
+                        custom_dict[current_aa] = []
+
+                if len(parts) >= 1 and parts[0].strip() == '':
+                    triplet_idx = 1 if len(parts) >= 2 else None
+                    priority_idx = 2 if len(parts) >= 3 else None
+                else:
+                    triplet_idx = 1 if len(parts) >= 2 else None
+                    priority_idx = 2 if len(parts) >= 3 else None
+
+                if triplet_idx is None or priority_idx is None:
+                    continue
+
+                triplet = parts[triplet_idx].strip().upper() if triplet_idx < len(parts) else None
+                priority_str = parts[priority_idx].strip() if priority_idx < len(parts) else None
+
+                if triplet and priority_str and current_aa:
+                    try:
+                        triplet_clean = ''.join([c for c in triplet if c in 'ATCG'])
+                        if len(triplet_clean) == 3:
+                            custom_dict[current_aa].append({
+                                'triplet': triplet_clean,
+                                'priority': int(float(priority_str))
+                            })
+                    except (ValueError, TypeError):
+                        pass
+
+        elif filename.endswith('.csv'):
+            df = pd.read_csv(file_obj, encoding='utf-8')
+            custom_dict, error = _parse_dataframe_to_dict(df)
+            if error:
+                return None, error
+
+        elif filename.endswith('.xlsx') or filename.endswith('.xls'):
+            df = pd.read_excel(file_obj)
+            custom_dict, error = _parse_dataframe_to_dict(df)
+            if error:
+                return None, error
+        else:
+            # 尝试作为txt解析
+            try:
+                file_obj.seek(0)
+                content = file_obj.read().decode('utf-8')
+                lines = content.split('\n')
+
+                custom_dict = {}
+                current_aa = None
+
+                for line in lines:
+                    line_raw = line
+                    if not line_raw.strip():
+                        continue
+
+                    reader = csv.reader([line_raw], delimiter='\t')
+                    parts = next(reader)
+
+                    if len(parts) >= 1 and parts[0].strip():
+                        aa_str = parts[0].strip()
+                        current_aa = aa_str.split('(')[0].strip().upper()
+                        if current_aa not in custom_dict:
+                            custom_dict[current_aa] = []
+
+                    if len(parts) >= 1 and parts[0].strip() == '':
+                        triplet_idx = 1 if len(parts) >= 2 else None
+                        priority_idx = 2 if len(parts) >= 3 else None
+                    else:
+                        triplet_idx = 1 if len(parts) >= 2 else None
+                        priority_idx = 2 if len(parts) >= 3 else None
+
+                    if triplet_idx is None or priority_idx is None:
+                        continue
+
+                    triplet = parts[triplet_idx].strip().upper() if triplet_idx < len(parts) else None
+                    priority_str = parts[priority_idx].strip() if priority_idx < len(parts) else None
+
+                    if triplet and priority_str and current_aa:
+                        try:
+                            triplet_clean = ''.join([c for c in triplet if c in 'ATCG'])
+                            if len(triplet_clean) == 3:
+                                custom_dict[current_aa].append({
+                                    'triplet': triplet_clean,
+                                    'priority': int(float(priority_str))
+                                })
+                        except (ValueError, TypeError):
+                            pass
+            except Exception as e:
+                return None, f"解析文件失败: {str(e)}"
+
+        custom_dict = {k: v for k, v in custom_dict.items() if v}
+
+        if not custom_dict:
+            return None, "未能解析出有效的密码子数据"
+
+        return custom_dict, None
+
+    except Exception as e:
+        return None, f"解析文件失败: {str(e)}"
+
+
+def _parse_dataframe_to_dict(df):
+    """将DataFrame解析为密码子字典"""
+    # 标准化列名
+    col_map = {}
+    for col in df.columns:
+        col_lower = str(col).lower().strip()
+        if col_lower in ['aa', '氨基酸', 'amino_acid', 'amino acid']:
+            col_map[col] = 'AA'
+        elif col_lower in ['triplet', '密码子', 'codon']:
+            col_map[col] = 'Triplet'
+        elif col_lower in ['priority', '优先级', '优先性']:
+            col_map[col] = 'priority'
+
+    if len(col_map) >= 3:
+        df = df.rename(columns=col_map)
+    else:
+        if len(df.columns) >= 3:
+            df.columns = ['AA', 'Triplet', 'priority'] + list(df.columns[3:])
+        else:
+            return None, f"文件列数不足，需要至少3列，当前只有{len(df.columns)}列"
+
+    custom_dict = {}
+    current_aa = None
+
+    for _, row in df.iterrows():
+        aa = row.get('AA')
+        if pd.notna(aa):
+            current_aa = str(aa).split('(')[0].strip().upper()
+            if current_aa not in custom_dict:
+                custom_dict[current_aa] = []
+
+        triplet = row.get('Triplet')
+        priority = row.get('priority')
+
+        if pd.notna(triplet) and pd.notna(priority) and current_aa:
+            try:
+                triplet_str = str(triplet).strip().upper()
+                triplet_str = ''.join([c for c in triplet_str if c in 'ATCG'])
+                if len(triplet_str) == 3:
+                    custom_dict[current_aa].append({
+                        'triplet': triplet_str,
+                        'priority': int(float(priority))
+                    })
+            except (ValueError, TypeError):
+                pass
+
+    custom_dict = {k: v for k, v in custom_dict.items() if v}
+
+    if not custom_dict:
+        return None, "未能解析出有效的密码子数据"
+
+    return custom_dict, None
+
+
+@st.cache_data
+def load_enzyme_sites():
+    """加载酶切位点"""
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(current_dir)
+    txt_path = os.path.join(root_dir, '输出的酶组.txt')
+
+    enzyme_sites = {}
+    try:
+        with open(txt_path, 'r') as f:
+            lines = f.read().strip().split('\n')
+
+        for line in lines:
+            parts = line.split(',')
+            if len(parts) == 2:
+                name = parts[0].strip()
+                seq = parts[1].strip()
+                enzyme_sites[name] = seq
+    except FileNotFoundError:
+        st.error(f"找不到酶切位点文件: {txt_path}")
+
+    return enzyme_sites
+
+
+# ========== 密码子优化核心函数 ==========
+
+def build_codon_cycle(codons):
+    """
+    构建密码子循环序列
+
+    新逻辑：
+    - 过滤掉priority=0的密码子
+    - 如果某个氨基酸只有2个priority>0的密码子，且优先级分别为2和1：
+      顺序为 2 -> 2 -> 1，循环（即两次p2后才用一次p1）
+    - 其他情况保持原有逻辑
+    """
+    filtered = [c for c in codons if c['priority'] > 0]
+    if not filtered:
+        return []
+
+    p2_list = [c for c in filtered if c['priority'] == 2]
+    p1_list = [c for c in filtered if c['priority'] == 1]
+
+    # 去重
+    seen_p2 = set()
+    unique_p2 = []
+    for c in p2_list:
+        if c['triplet'] not in seen_p2:
+            seen_p2.add(c['triplet'])
+            unique_p2.append(c)
+
+    seen_p1 = set()
+    unique_p1 = []
+    for c in p1_list:
+        if c['triplet'] not in seen_p1:
+            seen_p1.add(c['triplet'])
+            unique_p1.append(c)
+
+    # 新逻辑：如果只有2个priority>0的密码子（一个p2，一个p1）
+    # 顺序为 2 -> 2 -> 1，循环
+    if len(unique_p2) == 1 and len(unique_p1) == 1 and len(filtered) == 2:
+        cycle = []
+        # 2 -> 2 -> 1 循环
+        for i in range(100):  # 生成足够长的循环
+            cycle.append(unique_p2[0])  # p2
+            cycle.append(unique_p2[0])  # p2
+            cycle.append(unique_p1[0])  # p1
+        return cycle
+
+    # 原有逻辑（多密码子情况）
+    if not unique_p1:
+        return unique_p2
+    if not unique_p2:
+        return unique_p1
+
+    cycle = []
+    if len(unique_p2) <= 1:
+        for i in range(len(unique_p1)):
+            if unique_p2:
+                cycle.append(unique_p2[0])
+            cycle.append(unique_p1[i])
+    else:
+        p2_idx = 0
+        p1_idx = 0
+        total_states = len(unique_p2) + len(unique_p1)
+        for i in range(total_states * 2):
+            if i % 2 == 0:
+                if unique_p2:
+                    cycle.append(unique_p2[p2_idx % len(unique_p2)])
+                    p2_idx += 1
+                elif unique_p1:
+                    cycle.append(unique_p1[p1_idx % len(unique_p1)])
+                    p1_idx += 1
+            else:
+                if p1_idx < len(unique_p1):
+                    cycle.append(unique_p1[p1_idx])
+                    p1_idx += 1
+                elif unique_p2:
+                    cycle.append(unique_p2[p2_idx % len(unique_p2)])
+                    p2_idx += 1
+
+        final = []
+        seen = set()
+        for c in cycle:
+            key = (c['priority'], c['triplet'])
+            if key not in seen:
+                seen.add(key)
+                final.append(c)
+        cycle = final
+
+    return cycle
+
+
+def has_4_consecutive_bases(seq):
+    if len(seq) < 4:
+        return False
+    for i in range(len(seq) - 3):
+        if len(set(seq[i:i+4])) == 1:
+            return True
+    return False
+
+
+def contains_enzyme_site(seq, enzyme_sites):
+    for site in enzyme_sites.values():
+        if site in seq:
+            return True
+    return False
+
+
+def optimize_codons(aa_sequence, codon_dict, enzyme_sites):
+    """为氨基酸序列优化密码子分配"""
+
+    def score_seq(seq):
+        s = 0
+        if has_4_consecutive_bases(seq):
+            s += 100
+        if contains_enzyme_site(seq, enzyme_sites):
+            s += 10
+        return s
+
+    aa_cycles = {}
+    aa_next_idx = {}
+    for aa, codons in codon_dict.items():
+        aa_cycles[aa] = build_codon_cycle(codons)
+        aa_next_idx[aa] = 0
+
+    valid_aas = set(codon_dict.keys())
+    aa_list = []
+    for char in aa_sequence.upper().strip():
+        if char in valid_aas:
+            aa_list.append(char)
+        elif char in ' \n\t\r':
+            continue
+
+    if not aa_list:
+        return "", [], "未检测到有效的氨基酸序列"
+
+    result_codons = []
+    current_seq = ""
+
+    idx = 0
+    while idx < len(aa_list):
+        aa = aa_list[idx]
+        cycle = aa_cycles.get(aa, [])
+
+        if not cycle:
+            result_codons.append("???")
+            idx += 1
+            continue
+
+        start_idx = aa_next_idx[aa]
+
+        best_codon = None
+        best_score = float('inf')
+        best_cidx = start_idx
+        found_perfect = False
+
+        for offset in range(len(cycle)):
+            cidx = (start_idx + offset) % len(cycle)
+            candidate = cycle[cidx]
+            codon = candidate['triplet']
+
+            test_seq = current_seq + codon
+            score = score_seq(test_seq)
+
+            if score == 0:
+                best_codon = codon
+                best_cidx = cidx
+                found_perfect = True
+                break
+            elif score < best_score:
+                best_score = score
+                best_codon = codon
+                best_cidx = cidx
+
+        if found_perfect:
+            result_codons.append(best_codon)
+            current_seq += best_codon
+            aa_next_idx[aa] = (best_cidx + 1) % len(cycle)
+            idx += 1
+            continue
+
+        if idx > 0:
+            backtrack_success = False
+
+            for bt_depth in range(1, min(3, idx + 1)):
+                bt_pos = idx - bt_depth
+                bt_aa = aa_list[bt_pos]
+                bt_cycle = aa_cycles.get(bt_aa, [])
+                bt_codon_str = result_codons[bt_pos]
+
+                if not bt_cycle or bt_codon_str == "???":
+                    continue
+
+                bt_current_idx = None
+                for i, c in enumerate(bt_cycle):
+                    if c['triplet'] == bt_codon_str:
+                        bt_current_idx = i
+                        break
+
+                if bt_current_idx is None:
+                    continue
+
+                bt_seq_without = current_seq[:-len(bt_codon_str)]
+
+                for bt_offset in range(1, len(bt_cycle)):
+                    bt_new_idx = (bt_current_idx + bt_offset) % len(bt_cycle)
+                    bt_new_codon = bt_cycle[bt_new_idx]['triplet']
+                    bt_test_seq = bt_seq_without + bt_new_codon
+
+                    for offset in range(len(cycle)):
+                        cidx = (start_idx + offset) % len(cycle)
+                        codon = cycle[cidx]['triplet']
+                        final_test = bt_test_seq + codon
+
+                        if score_seq(final_test) == 0:
+                            result_codons[bt_pos] = bt_new_codon
+                            aa_next_idx[bt_aa] = (bt_new_idx + 1) % len(bt_cycle)
+
+                            result_codons.append(codon)
+                            aa_next_idx[aa] = (cidx + 1) % len(cycle)
+                            current_seq = final_test
+
+                            backtrack_success = True
+                            break
+
+                    if backtrack_success:
+                        break
+
+                if backtrack_success:
+                    break
+
+            if backtrack_success:
+                idx += 1
+                continue
+
+        result_codons.append(best_codon)
+        current_seq += best_codon
+        aa_next_idx[aa] = (best_cidx + 1) % len(cycle)
+        idx += 1
+
+    dna_sequence = "".join(result_codons)
+
+    final_warnings = []
+    if has_4_consecutive_bases(dna_sequence):
+        final_warnings.append("最终序列中存在4个以上连续相同碱基")
+    if contains_enzyme_site(dna_sequence, enzyme_sites):
+        final_warnings.append("最终序列中存在酶切位点")
+
+    warning_msg = "; ".join(final_warnings) if final_warnings else ""
+
+    return dna_sequence, result_codons, warning_msg
+
+
+# ========== 密码子丰度分析核心函数 ==========
+
+def analyze_codon_usage(dna_seq, codon_dict):
+    """
+    分析密码子使用丰度
+
+    返回字典：{氨基酸: {密码子: {count, priority, frequency}}}
+    """
+    # 分割密码子
+    codons = [dna_seq[i:i+3] for i in range(0, len(dna_seq), 3) if len(dna_seq[i:i+3]) == 3]
+
+    # 初始化统计结构
+    usage = {}
+    for aa, codon_list in codon_dict.items():
+        usage[aa] = {
+            'total': 0,
+            'codons': {}
+        }
+        for c in codon_list:
+            usage[aa]['codons'][c['triplet']] = {
+                'count': 0,
+                'priority': c['priority'],
+                'frequency': 0.0
+            }
+
+    # 统计
+    for codon in codons:
+        for aa, data in codon_dict.items():
+            for c in data:
+                if c['triplet'] == codon:
+                    usage[aa]['total'] += 1
+                    usage[aa]['codons'][codon]['count'] += 1
+                    break
+
+    # 计算频率
+    for aa, data in usage.items():
+        if data['total'] > 0:
+            for codon, info in data['codons'].items():
+                info['frequency'] = round(info['count'] / data['total'] * 100, 1)
+
+    return usage
+
+
+def build_usage_table(usage, codon_dict):
+    """将usage字典转换为DataFrame格式"""
+    rows = []
+    for aa in sorted(usage.keys()):
+        data = usage[aa]
+        if data['total'] == 0:
+            continue
+
+        for codon in sorted(data['codons'].keys()):
+            info = data['codons'][codon]
+            if info['count'] > 0 or info['priority'] > 0:
+                rows.append({
+                    '氨基酸': aa,
+                    '密码子': codon,
+                    '优先级': info['priority'],
+                    '使用次数': info['count'],
+                    '使用频率%': info['frequency']
+                })
+
+    return pd.DataFrame(rows)
+
+
+def compare_codon_usage(usage1, usage2, label1="程序优化", label2="手动优化"):
+    """对比两个密码子使用方案"""
+    rows = []
+    all_aas = set(usage1.keys()) | set(usage2.keys())
+
+    for aa in sorted(all_aas):
+        u1 = usage1.get(aa, {'total': 0, 'codons': {}})
+        u2 = usage2.get(aa, {'total': 0, 'codons': {}})
+
+        all_codons = set(u1['codons'].keys()) | set(u2['codons'].keys())
+
+        for codon in sorted(all_codons):
+            c1 = u1['codons'].get(codon, {'count': 0, 'priority': '-', 'frequency': 0})
+            c2 = u2['codons'].get(codon, {'count': 0, 'priority': '-', 'frequency': 0})
+
+            count1 = c1['count']
+            count2 = c2['count']
+
+            if count1 > 0 or count2 > 0:
+                freq1 = c1['frequency']
+                freq2 = c2['frequency']
+
+                rows.append({
+                    '氨基酸': aa,
+                    '密码子': codon,
+                    '优先级': c1.get('priority', c2.get('priority', '-')),
+                    f'{label1}_次数': count1,
+                    f'{label1}_频率%': freq1,
+                    f'{label2}_次数': count2,
+                    f'{label2}_频率%': freq2,
+                    '频率差异': round(freq1 - freq2, 1)
+                })
+
+    return pd.DataFrame(rows)
+
+
+def find_codon_differences(seq1, seq2, aa_list, codon_dict):
+    """找出两个密码子序列在相同氨基酸位置上的差异"""
+    codons1 = [seq1[i:i+3] for i in range(0, len(seq1), 3) if len(seq1[i:i+3]) == 3]
+    codons2 = [seq2[i:i+3] for i in range(0, len(seq2), 3) if len(seq2[i:i+3]) == 3]
+
+    differences = []
+    min_len = min(len(codons1), len(codons2), len(aa_list))
+
+    for i in range(min_len):
+        if codons1[i] != codons2[i]:
+            # 查找优先级
+            p1 = '-'
+            p2 = '-'
+            for c in codon_dict.get(aa_list[i], []):
+                if c['triplet'] == codons1[i]:
+                    p1 = c['priority']
+                if c['triplet'] == codons2[i]:
+                    p2 = c['priority']
+
+            differences.append({
+                '位置': i + 1,
+                '氨基酸': aa_list[i],
+                '程序优化': codons1[i],
+                '程序优先级': p1,
+                '手动优化': codons2[i],
+                '手动优先级': p2
+            })
+
+    return differences
+
+
+def render_codon_alignment(seq1, seq2, aa_list, codon_dict, differences, line_width=50):
+    """
+    生成HTML格式的密码子序列比对图（使用st.html渲染）
+    """
+    codons1 = [seq1[i:i+3] for i in range(0, len(seq1), 3) if len(seq1[i:i+3]) == 3]
+    codons2 = [seq2[i:i+3] for i in range(0, len(seq2), 3) if len(seq2[i:i+3]) == 3]
+
+    diff_positions = {d['位置'] - 1 for d in differences}
+
+    def get_priority(aa, codon):
+        for c in codon_dict.get(aa, []):
+            if c['triplet'] == codon:
+                return c['priority']
+        return '-'
+
+    total_codons = min(len(codons1), len(codons2), len(aa_list))
+    num_lines = (total_codons + line_width - 1) // line_width
+
+    # 构建HTML - 使用表格布局确保对齐和宽度利用
+    html_parts = []
+    html_parts.append('<div style="font-family:monospace;font-size:12px;line-height:1.5;background:#f8f9fa;border-radius:8px;padding:12px;overflow-x:auto;">')
+
+    for line_idx in range(num_lines):
+        start = line_idx * line_width
+        end = min(start + line_width, total_codons)
+
+        # 每行用一个table确保列对齐
+        html_parts.append('<table style="border-collapse:collapse;margin-bottom:4px;">')
+
+        # 位置行
+        html_parts.append('<tr>')
+        html_parts.append('<td style="padding:1px 6px;color:#868e96;font-size:10px;font-weight:bold;white-space:nowrap;">位置</td>')
+        for i in range(start, end):
+            pos_num = (i + 1) * 3 - 2
+            html_parts.append(f'<td style="padding:1px 2px;text-align:center;font-size:9px;color:#adb5bd;min-width:28px;">{pos_num}</td>')
+        html_parts.append('</tr>')
+
+        # 序列A行
+        html_parts.append('<tr>')
+        html_parts.append('<td style="padding:1px 6px;color:#0066cc;font-size:11px;font-weight:bold;white-space:nowrap;">🟦 序列A</td>')
+        for i in range(start, end):
+            aa = aa_list[i]
+            c1 = codons1[i]
+            is_diff = i in diff_positions
+            if is_diff:
+                p = get_priority(aa, c1)
+                if p == 2:
+                    bg, bd = '#fff3cd', '#ffc107'
+                elif p == 1:
+                    bg, bd = '#f8d7da', '#dc3545'
+                else:
+                    bg, bd = '#e2e3e5', '#6c757d'
+                style = f'background:{bg};border:1px solid {bd};font-weight:bold;'
+            else:
+                style = 'background:#d4edda;border:1px solid #c3e6cb;'
+            html_parts.append(f'<td style="padding:2px 1px;text-align:center;min-width:28px;">')
+            html_parts.append(f'<div style="{style}border-radius:3px;padding:1px 0;font-size:11px;letter-spacing:0.5px;">{c1}</div>')
+            html_parts.append(f'<div style="font-size:10px;color:#6c757d;">{aa}</div>')
+            html_parts.append('</td>')
+        html_parts.append('</tr>')
+
+        # 序列B行
+        html_parts.append('<tr>')
+        html_parts.append('<td style="padding:1px 6px;color:#cc0000;font-size:11px;font-weight:bold;white-space:nowrap;">🟥 序列B</td>')
+        for i in range(start, end):
+            aa = aa_list[i]
+            c2 = codons2[i]
+            is_diff = i in diff_positions
+            if is_diff:
+                p = get_priority(aa, c2)
+                if p == 2:
+                    bg, bd = '#fff3cd', '#ffc107'
+                elif p == 1:
+                    bg, bd = '#f8d7da', '#dc3545'
+                else:
+                    bg, bd = '#e2e3e5', '#6c757d'
+                style = f'background:{bg};border:1px solid {bd};font-weight:bold;'
+            else:
+                style = 'background:#d4edda;border:1px solid #c3e6cb;'
+            html_parts.append(f'<td style="padding:2px 1px;text-align:center;min-width:28px;">')
+            html_parts.append(f'<div style="{style}border-radius:3px;padding:1px 0;font-size:11px;letter-spacing:0.5px;">{c2}</div>')
+            html_parts.append(f'<div style="font-size:10px;color:#6c757d;">{aa}</div>')
+            html_parts.append('</td>')
+        html_parts.append('</tr>')
+
+        # 差异标记行
+        html_parts.append('<tr>')
+        html_parts.append('<td style="padding:1px 6px;color:#868e96;font-size:10px;white-space:nowrap;">差异</td>')
+        for i in range(start, end):
+            if i in diff_positions:
+                html_parts.append('<td style="padding:1px 2px;text-align:center;font-size:12px;color:#dc3545;">✕</td>')
+            else:
+                html_parts.append('<td style="padding:1px 2px;text-align:center;font-size:12px;color:#28a745;">✓</td>')
+        html_parts.append('</tr>')
+
+        html_parts.append('</table>')
+
+        if line_idx < num_lines - 1:
+            html_parts.append('<div style="border-top:1px dashed #dee2e6;margin:4px 0;"></div>')
+
+    # 图例
+    html_parts.append('<div style="display:flex;gap:12px;margin-top:8px;font-size:11px;flex-wrap:wrap;">')
+    html_parts.append('<span><span style="display:inline-block;width:16px;height:12px;background:#d4edda;border:1px solid #c3e6cb;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>相同</span>')
+    html_parts.append('<span><span style="display:inline-block;width:16px;height:12px;background:#fff3cd;border:1px solid #ffc107;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>差异(p2)</span>')
+    html_parts.append('<span><span style="display:inline-block;width:16px;height:12px;background:#f8d7da;border:1px solid #dc3545;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>差异(p1)</span>')
+    html_parts.append('<span><span style="display:inline-block;width:16px;height:12px;background:#e2e3e5;border:1px solid #6c757d;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>差异(未知)</span>')
+    html_parts.append('</div>')
+
+    html_parts.append('</div>')
+
+    return ''.join(html_parts)
+
+
+# ========== Streamlit 界面 ==========
+
+st.set_page_config(page_title="密码子优化工具", layout="wide")
+
+st.title("🔬 密码子优化工具")
+st.markdown("输入氨基酸序列，根据选择的密码子使用表优化密码子分配，并分析密码子丰度")
+
+# 加载数据
+all_codon_data = load_codon_data()
+cb_dict = all_codon_data.get('毕赤酵母', {})
+hx_dict = all_codon_data.get('汉逊酵母', {})
+xd_dict = all_codon_data.get('细胞表达系统', {})
+enzyme_sites = load_enzyme_sites()
+
+# ========== 侧边栏导航 ==========
+st.sidebar.title("功能导航")
+page = st.sidebar.radio("选择功能", ["密码子优化", "密码子丰度分析"])
+
+# ========== 页面1：密码子优化 ==========
+if page == "密码子优化":
+
+    st.header("🧬 密码子优化")
+
+    # 宿主选择
+    st.subheader("选择密码子使用表")
+
+    host_option = st.radio(
+        "选择来源",
+        options=["预设系统", "自定义上传"],
+        index=0,
+        horizontal=True
+    )
+
+    codon_dict = None
+    host_name = ""
+
+    if host_option == "预设系统":
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            host = st.radio(
+                "选择宿主",
+                options=["毕赤酵母", "汉逊酵母", "细胞表达系统"],
+                index=0
+            )
+
+        with col2:
+            if host == "毕赤酵母":
+                st.info(f"已加载毕赤酵母密码子表：{len(cb_dict)} 种氨基酸")
+                codon_dict = cb_dict
+            elif host == "汉逊酵母":
+                st.info(f"已加载汉逊酵母密码子表：{len(hx_dict)} 种氨基酸")
+                codon_dict = hx_dict
+            else:
+                st.info(f"已加载细胞表达系统密码子表：{len(xd_dict)} 种氨基酸")
+                codon_dict = xd_dict
+            host_name = host
+
+    else:
+        st.markdown("""
+        **自定义文件格式：**
+        - TXT文件（tab分隔），三列：**氨基酸(AA)**、**密码子(Triplet)**、**优先级(priority)**
+        - 优先级：2=最高，1=可用，0=禁用
+        - 第一行可以是列名（AA\tTriplet\tpriority），也可以直接从数据开始
+        """)
+
+        custom_file = st.file_uploader("上传自定义密码子表", type=["txt", "csv", "xlsx", "xls"])
+
+        if custom_file:
+            custom_dict, error_msg = parse_custom_codon_file(custom_file)
+            if error_msg:
+                st.error(f"❌ {error_msg}")
+            elif custom_dict:
+                codon_dict = custom_dict
+                host_name = f"自定义({custom_file.name})"
+                total_codons = sum(len(v) for v in custom_dict.values())
+                st.success(f"✅ 成功加载：{len(custom_dict)} 种氨基酸，{total_codons} 个密码子")
+
+                with st.expander("📋 预览"):
+                    preview_data = []
+                    for aa, codons in custom_dict.items():
+                        for c in codons:
+                            preview_data.append({"氨基酸": aa, "密码子": c['triplet'], "优先级": c['priority']})
+                    st.dataframe(pd.DataFrame(preview_data), use_container_width=True)
+        else:
+            st.info("👆 请上传文件")
+
+    if codon_dict is None:
+        st.stop()
+
+    # 输入区域
+    st.subheader("输入氨基酸序列")
+    input_method = st.radio("输入方式", ["直接输入", "上传FASTA"], horizontal=True)
+
+    aa_sequence = ""
+    if input_method == "直接输入":
+        aa_input = st.text_area("输入氨基酸单字母序列", height=150)
+        aa_sequence = aa_input
+    else:
+        fasta_file = st.file_uploader("上传FASTA文件", type=["fasta", "fa", "txt"])
+        if fasta_file:
+            content = fasta_file.read().decode('utf-8')
+            lines = content.strip().split('\n')
+            seq_lines = [l.strip() for l in lines if not l.startswith('>') and l.strip()]
+            aa_sequence = ''.join(seq_lines)
+            st.success(f"读取到 {len(aa_sequence)} 个氨基酸")
+
+    # 高级设置
+    with st.expander("⚙️ 高级设置"):
+        st.markdown("""
+        **优化规则：**
+        - 分配顺序：priority=2 → priority=1a → priority=2 → priority=1b → ...（多密码子情况）
+        - 特殊规则：如果某氨基酸只有1个p2和1个p1，则顺序为 2→2→1 循环
+        - priority=0 禁用
+        - 自动避免4+连续碱基和酶切位点
+        - 违规时跳过当前密码子（不消耗循环位置）
+        """)
+
+        show_table = st.checkbox("显示密码子表", value=False)
+        if show_table:
+            table_data = []
+            for aa, codons in codon_dict.items():
+                for c in codons:
+                    table_data.append({"氨基酸": aa, "密码子": c['triplet'], "优先级": c['priority']})
+            st.dataframe(pd.DataFrame(table_data), use_container_width=True)
+
+    # 执行优化
+    if aa_sequence and st.button("🚀 开始优化", type="primary", use_container_width=True):
+        with st.spinner("优化中..."):
+            dna_seq, codons, warnings = optimize_codons(aa_sequence, codon_dict, enzyme_sites)
+
+        if not dna_seq:
+            st.error("优化失败")
+            st.stop()
+
+        # 保存到session state供丰度分析使用
+        st.session_state['optimized_dna'] = dna_seq
+        st.session_state['optimized_codons'] = codons
+        st.session_state['aa_sequence'] = aa_sequence
+        st.session_state['codon_dict'] = codon_dict
+        st.session_state['host_name'] = host_name
+
+        st.markdown("---")
+        st.subheader("📋 优化结果")
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("氨基酸数量", len([c for c in codons if c != "???"]))
+        with col2:
+            st.metric("DNA长度", len(dna_seq))
+        with col3:
+            gc = dna_seq.count('G') + dna_seq.count('C')
+            st.metric("GC含量", f"{gc/len(dna_seq)*100:.1f}%")
+
+        # DNA序列展示
+        display_lines = []
+        for i in range(0, len(codons), 10):
+            chunk = codons[i:i+10]
+            display_lines.append(f"{i+1:>4d}: {' '.join(chunk)}")
+        st.code("\n".join(display_lines), language=None)
+
+        st.text_area("纯DNA序列", dna_seq, height=100)
+
+        # 对照表
+        aa_list = [c for c in aa_sequence.upper() if c in codon_dict]
+        comparison = []
+        for i, (aa, codon) in enumerate(zip(aa_list, codons)):
+            p = "-"
+            for c in codon_dict.get(aa, []):
+                if c['triplet'] == codon:
+                    p = str(c['priority'])
+                    break
+            comparison.append({"位置": i+1, "氨基酸": aa, "密码子": codon, "优先级": p})
+        st.dataframe(pd.DataFrame(comparison), use_container_width=True, height=400)
+
+        # 下载
+        st.subheader("下载")
+        col_d1, col_d2, col_d3 = st.columns(3)
+        with col_d1:
+            st.download_button("⬇️ FASTA", f">optimized_{host_name}\n{dna_seq}\n", 
+                             file_name=f"optimized_{host_name}.fasta")
+        with col_d2:
+            csv_buf = StringIO()
+            pd.DataFrame(comparison).to_csv(csv_buf, index=False)
+            st.download_button("⬇️ 对照表CSV", csv_buf.getvalue(), 
+                             file_name=f"comparison_{host_name}.csv")
+        with col_d3:
+            st.download_button("⬇️ DNA序列TXT", dna_seq, 
+                             file_name=f"dna_{host_name}.txt")
+
+        # 检查详情
+        with st.expander("🔍 酶切位点检查"):
+            found = []
+            for name, site in enzyme_sites.items():
+                if site in dna_seq:
+                    pos = []
+                    start = 0
+                    while True:
+                        idx = dna_seq.find(site, start)
+                        if idx == -1: break
+                        pos.append(idx+1)
+                        start = idx + 1
+                    found.append({"酶": name, "序列": site, "位置": ", ".join(map(str, pos)), "次数": len(pos)})
+            if found:
+                st.error(f"发现 {len(found)} 个")
+                st.dataframe(pd.DataFrame(found), use_container_width=True)
+            else:
+                st.success("没有酶切位点")
+
+        with st.expander("🔍 连续碱基检查"):
+            runs = []
+            i = 0
+            while i < len(dna_seq) - 3:
+                if len(set(dna_seq[i:i+4])) == 1:
+                    b = dna_seq[i]
+                    s = i
+                    while i < len(dna_seq) and dna_seq[i] == b:
+                        i += 1
+                    runs.append({"碱基": b, "位置": s+1, "长度": i-s})
+                else:
+                    i += 1
+            if runs:
+                st.error(f"发现 {len(runs)} 处")
+                st.dataframe(pd.DataFrame(runs), use_container_width=True)
+            else:
+                st.success("没有连续碱基")
+
+        # 提示去丰度分析
+        st.info("💡 优化完成！可切换到左侧「密码子丰度分析」查看详细丰度统计和对比")
+
+
+# ========== 页面2：密码子丰度分析 ==========
+else:
+
+    st.header("📊 密码子丰度分析")
+    st.markdown("分析密码子序列的使用丰度，支持程序优化结果与手动优化序列的对比")
+
+    # 选择密码子表（用于解析密码子到氨基酸的映射）
+    st.subheader("选择密码子解析表")
+
+    dict_option = st.radio(
+        "密码子表来源",
+        options=["使用程序优化的密码子表", "选择预设系统", "上传自定义表"],
+        index=0,
+        horizontal=True
+    )
+
+    codon_dict = None
+
+    if dict_option == "使用程序优化的密码子表":
+        if 'codon_dict' in st.session_state:
+            codon_dict = st.session_state['codon_dict']
+            st.success(f"✅ 已加载程序优化时使用的密码子表（{len(codon_dict)} 种氨基酸）")
+        else:
+            st.warning("⚠️ 尚未进行程序优化，请先完成优化或选择其他密码子表")
+            codon_dict = None
+
+    elif dict_option == "选择预设系统":
+        preset = st.radio("选择", ["毕赤酵母", "汉逊酵母", "细胞表达系统"], horizontal=True)
+        if preset == "毕赤酵母":
+            codon_dict = cb_dict
+        elif preset == "汉逊酵母":
+            codon_dict = hx_dict
+        else:
+            codon_dict = xd_dict
+        st.success(f"✅ 已加载{preset}密码子表")
+
+    else:
+        custom_file = st.file_uploader("上传密码子表", type=["txt", "csv", "xlsx", "xls"])
+        if custom_file:
+            custom_dict, error_msg = parse_custom_codon_file(custom_file)
+            if error_msg:
+                st.error(error_msg)
+            else:
+                codon_dict = custom_dict
+                st.success(f"✅ 已加载自定义密码子表（{len(custom_dict)} 种氨基酸）")
+        else:
+            st.info("👆 请上传文件")
+
+    if codon_dict is None:
+        st.stop()
+
+    # 输入序列
+    st.subheader("输入密码子序列")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**序列A（程序优化结果 / 主序列）**")
+
+        # 如果session中有优化结果，自动填充
+        has_program_result = 'optimized_dna' in st.session_state and st.session_state['optimized_dna']
+
+        if has_program_result:
+            use_program = st.checkbox("使用程序优化结果", value=True)
+            if use_program:
+                seq_a = st.session_state['optimized_dna']
+                st.text_area("序列A（已自动填充）", seq_a, height=100, disabled=True, 
+                           key="seq_a_auto")
+            else:
+                seq_a = st.text_area("输入DNA序列A", height=100, key="seq_a_manual")
+        else:
+            seq_a = st.text_area("输入DNA序列A（程序优化结果）", height=100, key="seq_a_input")
+            if not seq_a:
+                st.info("💡 提示：先在「密码子优化」页面完成优化，可自动填充此处")
+
+    with col2:
+        st.markdown("**序列B（手动优化结果 / 对比序列，可选）**")
+        seq_b = st.text_area("输入DNA序列B（手动优化，可选）", height=100, key="seq_b_input")
+
+        if seq_b:
+            st.caption("将对比序列A和序列B的密码子使用差异")
+
+    # 标准化序列（去除空格、换行等）
+    seq_a_clean = seq_a.replace(" ", "").replace("\n", "").replace("\t", "").upper() if isinstance(seq_a, str) else ""
+    seq_b_clean = seq_b.replace(" ", "").replace("\n", "").replace("\t", "").upper() if isinstance(seq_b, str) else ""
+
+    # 验证序列
+    valid_bases = set('ATCG')
+
+    if seq_a_clean and not all(c in valid_bases for c in seq_a_clean):
+        invalid = [c for c in seq_a_clean if c not in valid_bases]
+        st.error(f"序列A包含非法字符: {set(invalid)}")
+        st.stop()
+
+    if seq_b_clean and not all(c in valid_bases for c in seq_b_clean):
+        invalid = [c for c in seq_b_clean if c not in valid_bases]
+        st.error(f"序列B包含非法字符: {set(invalid)}")
+        st.stop()
+
+    # 分析按钮
+    if seq_a_clean and st.button("📊 分析丰度", type="primary", use_container_width=True):
+
+        st.markdown("---")
+
+        # ========== 序列A分析 ==========
+        st.subheader("📈 序列A 密码子丰度")
+
+        usage_a = analyze_codon_usage(seq_a_clean, codon_dict)
+        table_a = build_usage_table(usage_a, codon_dict)
+
+        if not table_a.empty:
+            st.dataframe(table_a, use_container_width=True)
+
+            # 下载
+            csv_a = StringIO()
+            table_a.to_csv(csv_a, index=False)
+            st.download_button("⬇️ 下载序列A丰度表", csv_a.getvalue(), 
+                             file_name="codon_usage_A.csv")
+        else:
+            st.warning("未能解析出有效的密码子数据")
+
+        # ========== 序列B分析（如果提供） ==========
+        if seq_b_clean:
+            st.markdown("---")
+            st.subheader("📈 序列B 密码子丰度")
+
+            usage_b = analyze_codon_usage(seq_b_clean, codon_dict)
+            table_b = build_usage_table(usage_b, codon_dict)
+
+            if not table_b.empty:
+                st.dataframe(table_b, use_container_width=True)
+
+                csv_b = StringIO()
+                table_b.to_csv(csv_b, index=False)
+                st.download_button("⬇️ 下载序列B丰度表", csv_b.getvalue(), 
+                                 file_name="codon_usage_B.csv")
+
+            # ========== 对比分析（图表形式） ==========
+            st.markdown("---")
+            st.subheader("🔍 序列A vs 序列B 对比分析")
+
+            comparison_df = compare_codon_usage(usage_a, usage_b, "序列A", "序列B")
+
+            if not comparison_df.empty:
+                # 筛选出有数据的行用于绘图
+                plot_df = comparison_df[(comparison_df['序列A_次数'] > 0) | (comparison_df['序列B_次数'] > 0)].copy()
+
+                if not plot_df.empty:
+                    from matplotlib.font_manager import FontProperties
+                    import matplotlib.font_manager as fm
+                    import os
+
+                    # 动态查找CJK字体文件（关键！避免硬编码路径）
+                    def find_cjk_font():
+                        candidates = [
+                            '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+                            '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
+                            '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+                            '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+                        ]
+                        for path in candidates:
+                            if os.path.exists(path):
+                                return path
+                        # fallback: 遍历fontManager
+                        for font in fm.fontManager.ttflist:
+                            name = font.name.lower()
+                            if 'noto sans cjk' in name or 'wenquanyi' in name or 'wqy' in name:
+                                if os.path.exists(font.fname):
+                                    return font.fname
+                        return None
+
+                    font_path = find_cjk_font()
+
+                    if font_path:
+                        fp = FontProperties(fname=font_path)
+                        fp_bold = FontProperties(fname=font_path)  # 同一文件包含多字重
+                    else:
+                        st.warning("未找到中文字体，图表中文可能显示为方框")
+                        fp = None
+                        fp_bold = None
+
+                    # 创建综合对比图 - 所有密码子一张图，高DPI
+                    fig, ax = plt.subplots(figsize=(max(16, len(plot_df) * 0.45), 7), dpi=400)
+
+                    x = np.arange(len(plot_df))
+                    width = 0.35
+
+                    # 根据优先级设置颜色
+                    colors_a = []
+                    colors_b = []
+                    for _, row in plot_df.iterrows():
+                        p = row['优先级']
+                        if p == 2:
+                            colors_a.append('#ffd93d')
+                            colors_b.append('#ffd93d')
+                        elif p == 1:
+                            colors_a.append('#6bcb77')
+                            colors_b.append('#6bcb77')
+                        else:
+                            colors_a.append('#95a5a6')
+                            colors_b.append('#95a5a6')
+
+                    bars1 = ax.bar(x - width/2, plot_df['序列A_次数'], width, 
+                                  label='A', color=colors_a, edgecolor='black', linewidth=0.3, alpha=0.85)
+                    bars2 = ax.bar(x + width/2, plot_df['序列B_次数'], width,
+                                  label='B', color=colors_b, edgecolor='black', linewidth=0.3, alpha=0.55, hatch='//')
+
+                    # 所有中文文本都显式指定fontproperties
+                    if fp:
+                        ax.set_xlabel('密码子 (氨基酸)', fontproperties=fp, fontsize=12)
+                        ax.set_ylabel('使用次数', fontproperties=fp, fontsize=12)
+                        ax.set_title('密码子使用次数对比 (序列A: 实心柱 | 序列B: 斜线柱)', 
+                                    fontproperties=fp_bold, fontsize=14)
+
+                        # X轴标签逐个设置字体
+                        xlabels = [f"{r['密码子']}\n({r['氨基酸']})" for _, r in plot_df.iterrows()]
+                        ax.set_xticks(x)
+                        ax.set_xticklabels(xlabels, rotation=45, ha='right')
+                        for label in ax.get_xticklabels():
+                            label.set_fontproperties(fp)
+                            label.set_fontsize(7)
+
+                        # Y轴标签
+                        for label in ax.get_yticklabels():
+                            label.set_fontproperties(fp)
+                            label.set_fontsize(10)
+
+                        # 图例
+                        legend = ax.legend(fontsize=11, loc='upper right')
+                        for text in legend.get_texts():
+                            text.set_fontproperties(fp)
+                            text.set_fontsize(11)
+                    else:
+                        ax.set_xlabel('Codon (AA)', fontsize=12)
+                        ax.set_ylabel('Count', fontsize=12)
+                        ax.set_title('Codon Usage Comparison', fontsize=14)
+                        ax.set_xticks(x)
+                        ax.set_xticklabels([f"{r['密码子']}\n({r['氨基酸']})" for _, r in plot_df.iterrows()], 
+                                          fontsize=7, rotation=45, ha='right')
+                        ax.legend(fontsize=11, loc='upper right')
+
+                    ax.grid(axis='y', alpha=0.3, linestyle='--')
+
+                    # 在柱子上标注数值
+                    for bar in bars1:
+                        h = bar.get_height()
+                        if h > 0:
+                            ax.annotate(f'{int(h)}',
+                                      xy=(bar.get_x() + bar.get_width() / 2, h),
+                                      xytext=(0, 2), textcoords="offset points",
+                                      ha='center', va='bottom', fontsize=6, color='#0066cc', fontweight='bold')
+                    for bar in bars2:
+                        h = bar.get_height()
+                        if h > 0:
+                            ax.annotate(f'{int(h)}',
+                                      xy=(bar.get_x() + bar.get_width() / 2, h),
+                                      xytext=(0, 2), textcoords="offset points",
+                                      ha='center', va='bottom', fontsize=6, color='#cc0000', fontweight='bold')
+
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                    plt.close()
+
+                # 显示详细表格
+                with st.expander("📋 查看详细对比表格"):
+                    st.dataframe(comparison_df, use_container_width=True)
+
+                csv_comp = StringIO()
+                comparison_df.to_csv(csv_comp, index=False)
+                st.download_button("⬇️ 下载对比表", csv_comp.getvalue(), 
+                                 file_name="codon_comparison.csv")
+
+                # 统计差异
+                diff_rows = comparison_df[comparison_df['频率差异'] != 0]
+                if not diff_rows.empty:
+                    st.markdown(f"**共有 {len(diff_rows)} 个密码子使用频率存在差异**")
+                else:
+                    st.success("两个序列的密码子使用完全一致！")
+
+            # ========== 位置级差异（逐密码子对比） ==========
+            st.markdown("---")
+            st.subheader("📍 逐位置密码子差异")
+
+            # 获取氨基酸序列（用于位置对照）
+            aa_list = []
+            if 'aa_sequence' in st.session_state:
+                aa_list = [c for c in st.session_state['aa_sequence'].upper() if c in codon_dict]
+
+            if not aa_list and seq_a_clean:
+                # 从序列A反推氨基酸
+                codons_a = [seq_a_clean[i:i+3] for i in range(0, len(seq_a_clean), 3) if len(seq_a_clean[i:i+3]) == 3]
+                for codon in codons_a:
+                    for aa, data in codon_dict.items():
+                        if any(c['triplet'] == codon for c in data):
+                            aa_list.append(aa)
+                            break
+
+            if aa_list and len(seq_a_clean) == len(seq_b_clean):
+                differences = find_codon_differences(seq_a_clean, seq_b_clean, aa_list, codon_dict)
+
+                if differences:
+                    st.markdown(f"**发现 {len(differences)} 处密码子选择差异：**")
+
+                    # 序列比对可视化
+                    st.markdown("##### 🧬 序列比对图")
+                    alignment_html = render_codon_alignment(
+                        seq_a_clean, seq_b_clean, aa_list, 
+                        codon_dict, differences, line_width=50
+                    )
+                    st.html(alignment_html)
+
+                    st.markdown("##### 📋 差异详情表格")
+                    diff_df = pd.DataFrame(differences)
+                    st.dataframe(diff_df, use_container_width=True, height=400)
+
+                    csv_diff = StringIO()
+                    diff_df.to_csv(csv_diff, index=False)
+                    st.download_button("⬇️ 下载差异详情", csv_diff.getvalue(), 
+                                     file_name="codon_differences.csv")
+                else:
+                    st.success("两个序列在所有位置上的密码子选择完全一致！")
+
+                    # 即使无差异，也展示比对图
+                    st.markdown("##### 🧬 序列比对图")
+                    alignment_html = render_codon_alignment(
+                        seq_a_clean, seq_b_clean, aa_list, 
+                        codon_dict, [], line_width=50
+                    )
+                    st.html(alignment_html)
+
+            elif len(seq_a_clean) != len(seq_b_clean):
+                st.info("序列长度不同，无法进行逐位置对比")
+            else:
+                st.info("无法获取氨基酸序列进行逐位置对比")
+
+        # ========== 单独序列A的统计图表 ==========
+        if not seq_b_clean:
+            st.markdown("---")
+            st.subheader("📊 密码子使用统计")
+
+            # 按氨基酸分组展示
+            for aa in sorted(usage_a.keys()):
+                data = usage_a[aa]
+                if data['total'] == 0:
+                    continue
+
+                with st.expander(f"氨基酸 {aa}（共 {data['total']} 次）"):
+                    aa_data = []
+                    for codon, info in data['codons'].items():
+                        if info['count'] > 0:
+                            aa_data.append({
+                                '密码子': codon,
+                                '优先级': info['priority'],
+                                '使用次数': info['count'],
+                                '使用频率%': info['frequency']
+                            })
+
+                    if aa_data:
+                        st.dataframe(pd.DataFrame(aa_data), use_container_width=True)
+
+                        # 简单的条形图
+                        fig, ax = plt.subplots(figsize=(8, 3))
+                        df_plot = pd.DataFrame(aa_data)
+                        colors = ['#ff6b6b' if p == 2 else '#4ecdc4' if p == 1 else '#95a5a6' 
+                                 for p in df_plot['优先级']]
+                        ax.bar(df_plot['密码子'], df_plot['使用次数'], color=colors)
+                        ax.set_xlabel('密码子')
+                        ax.set_ylabel('使用次数')
+                        ax.set_title(f'氨基酸 {aa} 的密码子使用分布')
+                        st.pyplot(fig)
+                    else:
+                        st.write("该氨基酸未在序列中使用")

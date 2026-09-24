@@ -1,0 +1,36 @@
+{
+  "project_name": "KLB \u77ac\u8f6c\u53d1\u9175\u6db2\u68c0\u6d4bWecten blot",
+  "lanes": [
+    {
+      "x": 12,
+      "name": "MK",
+      "bands": [
+        15
+      ]
+    },
+    {
+      "x": 66,
+      "name": "R",
+      "bands": []
+    },
+    {
+      "x": 118,
+      "name": "NR",
+      "bands": []
+    }
+  ],
+  "mk_type": "65kd",
+  "label_offset": -10,
+  "rotation": 0,
+  "font": "Arial",
+  "band_offset": 15,
+  "font_size": 16,
+  "lane_color": "#000000",
+  "band_color": "#000000",
+  "offset_settings": {
+    "0_label": [
+      1,
+      0
+    ]
+  }
+}

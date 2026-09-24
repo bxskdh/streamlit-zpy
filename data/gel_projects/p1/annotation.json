@@ -1,0 +1,100 @@
+{
+  "project_name": "p1",
+  "lanes": [
+    {
+      "x": 8,
+      "name": "Lane1",
+      "bands": []
+    },
+    {
+      "x": 32,
+      "name": "Lane2",
+      "bands": []
+    },
+    {
+      "x": 83,
+      "name": "Lane3",
+      "bands": []
+    },
+    {
+      "x": 111,
+      "name": "Lane4",
+      "bands": []
+    },
+    {
+      "x": 135,
+      "name": "Lane5",
+      "bands": []
+    },
+    {
+      "x": 164,
+      "name": "Lane6",
+      "bands": []
+    },
+    {
+      "x": 190,
+      "name": "MK",
+      "bands": [
+        42,
+        115,
+        81,
+        126,
+        137,
+        175,
+        204,
+        233,
+        252,
+        271
+      ]
+    },
+    {
+      "x": 218,
+      "name": "Lane8",
+      "bands": []
+    },
+    {
+      "x": 247,
+      "name": "Lane9",
+      "bands": []
+    },
+    {
+      "x": 271,
+      "name": "Lane10",
+      "bands": []
+    },
+    {
+      "x": 295,
+      "name": "Lane11",
+      "bands": []
+    },
+    {
+      "x": 319,
+      "name": "Lane12",
+      "bands": []
+    },
+    {
+      "x": 343,
+      "name": "Lane13",
+      "bands": []
+    },
+    {
+      "x": 58,
+      "name": "Lane14",
+      "bands": []
+    }
+  ],
+  "mk_type": "Tris-Glycine 15%",
+  "label_offset": -49,
+  "rotation": 35,
+  "font": "Arial",
+  "band_offset": 0,
+  "font_size": 16,
+  "lane_color": "#000000",
+  "band_color": "#000000",
+  "offset_settings": {
+    "6_band_0": [
+      0,
+      0
+    ]
+  }
+}

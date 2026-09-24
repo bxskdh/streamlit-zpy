@@ -1,0 +1,79 @@
+{
+  "project_name": "text1",
+  "lanes": [
+    {
+      "x": 24,
+      "name": "Lane1",
+      "bands": []
+    },
+    {
+      "x": 65,
+      "name": "Lane2",
+      "bands": []
+    },
+    {
+      "x": 104,
+      "name": "Lane3",
+      "bands": []
+    },
+    {
+      "x": 143,
+      "name": "Lane4",
+      "bands": []
+    },
+    {
+      "x": 178,
+      "name": "MK",
+      "bands": [
+        81,
+        129,
+        174,
+        206,
+        261,
+        299,
+        345,
+        364,
+        394,
+        413
+      ]
+    },
+    {
+      "x": 218,
+      "name": "Lane6",
+      "bands": []
+    },
+    {
+      "x": 258,
+      "name": "Lane7",
+      "bands": []
+    },
+    {
+      "x": 297,
+      "name": "Lane8",
+      "bands": []
+    },
+    {
+      "x": 334,
+      "name": "Lane9",
+      "bands": []
+    }
+  ],
+  "mk_type": "\u672a\u77e5",
+  "label_offset": -53,
+  "rotation": 46,
+  "font": "Arial",
+  "band_offset": 13,
+  "font_size": 16,
+  "lane_color": "#000000",
+  "band_color": "#000000",
+  "offset_settings": {
+    "4_label": [
+      -5,
+      9
+    ],
+    "4_band_0": [
+      0,
+      3
+    ]
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "project_name": "WB-Sterp-NR",
+  "lanes": [
+    {
+      "x": 33,
+      "name": "MK",
+      "bands": [
+        156,
+        217,
+        285,
+        381,
+        438,
+        471,
+        501,
+        553,
+        579,
+        619,
+        644
+      ]
+    },
+    {
+      "x": 84,
+      "name": "CE60",
+      "bands": []
+    },
+    {
+      "x": 141,
+      "name": "CE61",
+      "bands": []
+    },
+    {
+      "x": 211,
+      "name": "CE62",
+      "bands": []
+    },
+    {
+      "x": 261,
+      "name": "MK",
+      "bands": []
+    },
+    {
+      "x": 307,
+      "name": "CE48",
+      "bands": []
+    },
+    {
+      "x": 373,
+      "name": "CE49",
+      "bands": []
+    },
+    {
+      "x": 433,
+      "name": "CE50",
+      "bands": []
+    },
+    {
+      "x": 491,
+      "name": "CE51",
+      "bands": []
+    },
+    {
+      "x": 551,
+      "name": "CE52",
+      "bands": []
+    },
+    {
+      "x": 603,
+      "name": "CE53",
+      "bands": []
+    },
+    {
+      "x": 653,
+      "name": "CE31",
+      "bands": []
+    },
+    {
+      "x": 717,
+      "name": "pp65",
+      "bands": []
+    }
+  ],
+  "mk_type": "65kd",
+  "label_offset": -43,
+  "rotation": 28,
+  "font": "Arial",
+  "band_offset": 6,
+  "font_size": 16,
+  "lane_color": "#000000",
+  "band_color": "#000000",
+  "offset_settings": {}
+}
