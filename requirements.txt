@@ -1,0 +1,11 @@
+streamlit
+matplotlib
+plotly
+streamlit-paste-button
+streamlit
+matplotlib
+plotly
+streamlit-paste-button
+pandas
+numpy
+Pillow
