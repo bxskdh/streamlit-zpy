@@ -2,11 +2,11 @@ streamlit
 matplotlib
 plotly
 streamlit-paste-button
+streamlit-image-coordinates
 streamlit
 matplotlib
-plotly
-streamlit-paste-button
 pandas
 numpy
 Pillow
 biopython
+cv2
