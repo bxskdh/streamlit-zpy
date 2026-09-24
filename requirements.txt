@@ -3,10 +3,9 @@ matplotlib
 plotly
 streamlit-paste-button
 streamlit-image-coordinates
-streamlit
-matplotlib
+biopython
+python-pptx
 pandas
 numpy
 Pillow
-biopython
-cv2
+opencv-python-headless
